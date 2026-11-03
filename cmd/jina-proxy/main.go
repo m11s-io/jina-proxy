@@ -9,8 +9,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/m11s-io/rerank-proxy/internal/config"
-	"github.com/m11s-io/rerank-proxy/internal/server"
+	"github.com/m11s-io/jina-proxy/internal/backend"
+	"github.com/m11s-io/jina-proxy/internal/config"
+	"github.com/m11s-io/jina-proxy/internal/formatter"
+	"github.com/m11s-io/jina-proxy/internal/server"
 )
 
 func main() {
@@ -20,9 +22,19 @@ func main() {
 		os.Exit(2)
 	}
 
+	f, err := formatter.New(cfg.ModelFormatter)
+	if err != nil {
+		slog.Error("invalid formatter", "error", err)
+		os.Exit(2)
+	}
+	b, err := backend.New(cfg.ServingBackend, cfg, &http.Client{Timeout: cfg.Timeout})
+	if err != nil {
+		slog.Error("invalid backend", "error", err)
+		os.Exit(2)
+	}
 	httpServer := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           server.New(cfg),
+		Handler:           server.New(cfg, f, b),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -38,7 +50,7 @@ func main() {
 		}
 	}()
 
-	slog.Info("rerank proxy listening", "address", cfg.ListenAddr)
+	slog.Info("jina proxy listening", "address", cfg.ListenAddr)
 	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("server stopped", "error", err)
 		os.Exit(1)

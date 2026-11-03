@@ -5,10 +5,10 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/rerank-proxy ./cmd/rerank-proxy
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/jina-proxy ./cmd/jina-proxy
 
 FROM scratch
-COPY --from=build /out/rerank-proxy /rerank-proxy
+COPY --from=build /out/jina-proxy /jina-proxy
 USER 65532:65532
 EXPOSE 8080
-ENTRYPOINT ["/rerank-proxy"]
+ENTRYPOINT ["/jina-proxy"]
