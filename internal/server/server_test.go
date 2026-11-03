@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -8,7 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/m11s-io/rerank-proxy/internal/config"
+	"github.com/m11s-io/jina-proxy/internal/backend"
+	"github.com/m11s-io/jina-proxy/internal/config"
+	"github.com/m11s-io/jina-proxy/internal/formatter"
 )
 
 func TestRerankTranslatesJinaRequestAndRestoresDocuments(t *testing.T) {
@@ -40,7 +44,7 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestHealthAndValidation(t *testing.T) {
-	h := New(config.Config{MaxRequestBytes: 1024, MaxDocuments: 1, MaxDocumentBytes: 10})
+	h := newHandler(config.Config{MaxRequestBytes: 1024, MaxDocuments: 1, MaxDocumentBytes: 10}, &http.Client{})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if rec.Code != http.StatusOK {
@@ -67,5 +71,27 @@ func TestReadyReflectsOVMSHealth(t *testing.T) {
 		if rec.Code != tc.want {
 			t.Fatalf("upstream=%d status=%d", tc.upstream, rec.Code)
 		}
+	}
+}
+
+func newHandler(cfg config.Config, client *http.Client) http.Handler {
+	b, _ := backend.New("ovms", cfg, client)
+	f, _ := formatter.New("qwen3")
+	return New(cfg, f, b)
+}
+
+type failingBackend struct{}
+
+func (failingBackend) Ready(context.Context) error { return nil }
+func (failingBackend) Rerank(context.Context, backend.Request) ([]backend.Result, error) {
+	return nil, fmt.Errorf("private upstream credential")
+}
+func TestBackendErrorsAreSanitized(t *testing.T) {
+	f, _ := formatter.New("qwen3")
+	h := New(config.Config{MaxRequestBytes: 1024, MaxDocuments: 10, MaxDocumentBytes: 100}, f, failingBackend{})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/rerank", strings.NewReader(`{"model":"jina-reranker-v2-base-multilingual","query":"q","documents":["d"]}`)))
+	if rec.Code != 502 || strings.Contains(rec.Body.String(), "credential") || !strings.Contains(rec.Body.String(), "upstream unavailable") {
+		t.Fatalf("unsafe error: %d %s", rec.Code, rec.Body.String())
 	}
 }

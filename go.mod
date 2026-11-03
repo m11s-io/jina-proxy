@@ -1,4 +1,4 @@
-module github.com/m11s-io/rerank-proxy
+module github.com/m11s-io/jina-proxy
 
 go 1.27
 

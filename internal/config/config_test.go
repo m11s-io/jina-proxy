@@ -28,3 +28,16 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		t.Fatal("expected invalid URL error")
 	}
 }
+
+func TestPluginSelectors(t *testing.T) {
+	for _, key := range []string{"MODEL_FORMATTER", "SERVING_BACKEND"} {
+		for _, invalid := range []string{"", "unknown"} {
+			t.Run(key+"/"+invalid, func(t *testing.T) {
+				t.Setenv(key, invalid)
+				if _, err := Load(); err == nil {
+					t.Fatal("expected invalid plugin selector to fail")
+				}
+			})
+		}
+	}
+}

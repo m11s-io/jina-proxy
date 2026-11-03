@@ -9,6 +9,8 @@ import (
 )
 
 type Config struct {
+	ModelFormatter   string
+	ServingBackend   string
 	ListenAddr       string
 	UpstreamURL      string
 	UpstreamModel    string
@@ -21,6 +23,8 @@ type Config struct {
 
 func Load() (Config, error) {
 	c := Config{
+		ModelFormatter:   value("MODEL_FORMATTER", "qwen3"),
+		ServingBackend:   value("SERVING_BACKEND", "ovms"),
 		ListenAddr:       value("LISTEN_ADDR", ":8080"),
 		UpstreamURL:      value("UPSTREAM_URL", "http://127.0.0.1:8000/v3/rerank"),
 		UpstreamModel:    value("UPSTREAM_MODEL", "OpenVINO/Qwen3-Reranker-0.6B-seq-cls-fp16-ov"),
@@ -30,6 +34,11 @@ func Load() (Config, error) {
 		MaxDocumentBytes: 65536,
 	}
 
+	for key, want := range map[string]string{"MODEL_FORMATTER": "qwen3", "SERVING_BACKEND": "ovms"} {
+		if v, ok := os.LookupEnv(key); ok && v != want {
+			return Config{}, fmt.Errorf("unsupported %s %q", key, v)
+		}
+	}
 	u, err := url.ParseRequestURI(c.UpstreamURL)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return Config{}, fmt.Errorf("UPSTREAM_URL must be an absolute HTTP URL")

@@ -1,40 +1,25 @@
 package server
 
 import (
-	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
-	"net/url"
 
-	"github.com/m11s-io/rerank-proxy/internal/api"
-	"github.com/m11s-io/rerank-proxy/internal/config"
-	"github.com/m11s-io/rerank-proxy/internal/qwen"
+	"github.com/m11s-io/jina-proxy/internal/api"
+	"github.com/m11s-io/jina-proxy/internal/backend"
+	"github.com/m11s-io/jina-proxy/internal/config"
+	"github.com/m11s-io/jina-proxy/internal/formatter"
 )
 
-type upstreamRequest struct {
-	Model           string   `json:"model"`
-	Query           string   `json:"query"`
-	Documents       []string `json:"documents"`
-	TopN            *int     `json:"top_n,omitempty"`
-	ReturnDocuments bool     `json:"return_documents"`
-}
-type upstreamResult struct {
-	Index          int     `json:"index"`
-	RelevanceScore float64 `json:"relevance_score"`
-}
-type upstreamResponse struct {
-	Results []upstreamResult `json:"results"`
-}
-
 type Handler struct {
-	cfg    config.Config
-	client *http.Client
+	cfg       config.Config
+	backend   backend.Backend
+	formatter formatter.Formatter
 }
 
-func New(cfg config.Config) http.Handler { return newHandler(cfg, &http.Client{Timeout: cfg.Timeout}) }
-func newHandler(cfg config.Config, client *http.Client) http.Handler {
-	h := &Handler{cfg: cfg, client: client}
+func New(cfg config.Config, f formatter.Formatter, b backend.Backend) http.Handler {
+	h := &Handler{cfg: cfg, backend: b, formatter: f}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", ok)
 	mux.HandleFunc("GET /readyz", h.ready)
@@ -45,23 +30,8 @@ func ok(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (h *Handler) ready(w http.ResponseWriter, r *http.Request) {
-	u, err := url.Parse(h.cfg.UpstreamURL)
-	if err != nil || u.Host == "" {
-		writeError(w, http.StatusServiceUnavailable, "upstream unavailable")
-		return
-	}
-	u.Path = "/v2/health/ready"
-	u.RawQuery = ""
-	req, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, u.String(), nil)
-	resp, err := h.client.Do(req)
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "upstream unavailable")
-		return
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		writeError(w, http.StatusServiceUnavailable, "upstream unavailable")
+	if err := h.backend.Ready(r.Context()); err != nil {
+		writeError(w, 503, "upstream unavailable")
 		return
 	}
 	ok(w, r)
@@ -101,37 +71,25 @@ func (h *Handler) RerankV1RerankPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out := upstreamRequest{Model: h.cfg.UpstreamModel, Query: qwen.FormatQuery(h.cfg.Instruction, in.Query), TopN: in.TopN, ReturnDocuments: false, Documents: make([]string, len(documents))}
+	out := backend.Request{Model: h.cfg.UpstreamModel, Query: h.formatter.Query(h.cfg.Instruction, in.Query), TopN: in.TopN, ReturnDocuments: false, Documents: make([]string, len(documents))}
 	for i, d := range documents {
-		out.Documents[i] = qwen.FormatDocument(d)
+		out.Documents[i] = h.formatter.Document(d)
 	}
-	payload, _ := json.Marshal(out)
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, h.cfg.UpstreamURL, bytes.NewReader(payload))
+	resultsUpstream, err := h.backend.Rerank(r.Context(), out)
 	if err != nil {
-		writeError(w, 502, "upstream unavailable")
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := h.client.Do(req)
-	if err != nil {
-		writeError(w, 502, "upstream unavailable")
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-		writeError(w, 502, "upstream error")
-		return
-	}
-	var upstream upstreamResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, h.cfg.MaxRequestBytes)).Decode(&upstream); err != nil {
-		writeError(w, 502, "invalid upstream response")
+		message := "upstream unavailable"
+		if errors.Is(err, backend.ErrStatus) {
+			message = "upstream error"
+		} else if errors.Is(err, backend.ErrResponse) {
+			message = "invalid upstream response"
+		}
+		writeError(w, 502, message)
 		return
 	}
 
 	includeDocs := in.ReturnDocuments == nil || *in.ReturnDocuments
-	results := make([]api.RerankingResult, len(upstream.Results))
-	for i, item := range upstream.Results {
+	results := make([]api.RerankingResult, len(resultsUpstream))
+	for i, item := range resultsUpstream {
 		if item.Index < 0 || item.Index >= len(documents) {
 			writeError(w, 502, "invalid upstream result index")
 			return

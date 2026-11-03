@@ -1,6 +1,6 @@
-# rerank-proxy
+# jina-proxy
 
-`rerank-proxy` exposes Jina's `/v1/rerank` HTTP contract and adapts text
+`jina-proxy` exposes Jina's `/v1/rerank` HTTP contract and adapts text
 requests for Qwen3-Reranker running in OpenVINO Model Server (OVMS). It exists
 so clients such as LibreChat can use a self-hosted Qwen reranker through their
 existing Jina integration.
@@ -52,9 +52,13 @@ Requires Go 1.27.
 go generate ./...
 go test -race ./...
 go vet ./...
-docker build -t rerank-proxy:test .
+docker build -t jina-proxy:test .
 ```
 
 The generated source is committed. When updating Jina's contract, replace the
 pinned document from `https://api.jina.ai/openapi.json`, run `go generate
 ./...`, and review both the specification and generated diff.
+
+## Plugins
+
+Select `MODEL_FORMATTER=qwen3` and `SERVING_BACKEND=ovms` (the defaults). These are the only implementations currently supported. Unknown or explicitly empty selectors fail startup. Formatters own model input formatting; backends own inference transport and readiness.
