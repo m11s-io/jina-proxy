@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/m11s-io/jina-proxy/internal/config"
 	"io"
@@ -26,6 +27,10 @@ type upstreamResponse struct {
 	Results []upstreamResult `json:"results"`
 }
 
+var ErrUnavailable = errors.New("upstream unavailable")
+var ErrStatus = errors.New("upstream error")
+var ErrResponse = errors.New("invalid upstream response")
+
 type Request = upstreamRequest
 type Result = upstreamResult
 type Backend interface {
@@ -46,7 +51,7 @@ func New(name string, cfg config.Config, client *http.Client) (Backend, error) {
 func (h *OVMS) Ready(ctx context.Context) error {
 	u, err := url.Parse(h.cfg.UpstreamURL)
 	if err != nil || u.Host == "" {
-		return fmt.Errorf("upstream unavailable")
+		return ErrUnavailable
 	}
 	u.Path = "/v2/health/ready"
 	u.RawQuery = ""
@@ -61,7 +66,7 @@ func (h *OVMS) Ready(ctx context.Context) error {
 	defer resp.Body.Close()
 	io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("upstream unavailable")
+		return ErrUnavailable
 	}
 	return nil
 }
@@ -69,21 +74,21 @@ func (h *OVMS) Rerank(ctx context.Context, out Request) ([]Result, error) {
 	payload, _ := json.Marshal(out)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.cfg.UpstreamURL, bytes.NewReader(payload))
 	if err != nil {
-		return nil, fmt.Errorf("upstream unavailable")
+		return nil, ErrUnavailable
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := h.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("upstream unavailable")
+		return nil, ErrUnavailable
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("upstream error")
+		return nil, ErrStatus
 	}
 	var upstream upstreamResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, h.cfg.MaxRequestBytes)).Decode(&upstream); err != nil {
-		return nil, fmt.Errorf("invalid upstream response")
+		return nil, ErrResponse
 	}
 
 	return upstream.Results, nil

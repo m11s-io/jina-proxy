@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 
@@ -76,7 +77,13 @@ func (h *Handler) RerankV1RerankPost(w http.ResponseWriter, r *http.Request) {
 	}
 	resultsUpstream, err := h.backend.Rerank(r.Context(), out)
 	if err != nil {
-		writeError(w, 502, err.Error())
+		message := "upstream unavailable"
+		if errors.Is(err, backend.ErrStatus) {
+			message = "upstream error"
+		} else if errors.Is(err, backend.ErrResponse) {
+			message = "invalid upstream response"
+		}
+		writeError(w, 502, message)
 		return
 	}
 

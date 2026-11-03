@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -76,4 +78,20 @@ func newHandler(cfg config.Config, client *http.Client) http.Handler {
 	b, _ := backend.New("ovms", cfg, client)
 	f, _ := formatter.New("qwen3")
 	return New(cfg, f, b)
+}
+
+type failingBackend struct{}
+
+func (failingBackend) Ready(context.Context) error { return nil }
+func (failingBackend) Rerank(context.Context, backend.Request) ([]backend.Result, error) {
+	return nil, fmt.Errorf("private upstream credential")
+}
+func TestBackendErrorsAreSanitized(t *testing.T) {
+	f, _ := formatter.New("qwen3")
+	h := New(config.Config{MaxRequestBytes: 1024, MaxDocuments: 10, MaxDocumentBytes: 100}, f, failingBackend{})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/rerank", strings.NewReader(`{"model":"jina-reranker-v2-base-multilingual","query":"q","documents":["d"]}`)))
+	if rec.Code != 502 || strings.Contains(rec.Body.String(), "credential") || !strings.Contains(rec.Body.String(), "upstream unavailable") {
+		t.Fatalf("unsafe error: %d %s", rec.Code, rec.Body.String())
+	}
 }
