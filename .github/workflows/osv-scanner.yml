@@ -1,3 +1,4 @@
+# Managed by infra/github; edit the shared workflow or its OpenTofu settings.
 name: OSV dependency scan
 
 on:
@@ -18,4 +19,5 @@ concurrency:
 jobs:
   scan:
     uses: m11s-io/.github/.github/workflows/osv-scanner.yml@main
-
+    with:
+      upload-sarif: true
